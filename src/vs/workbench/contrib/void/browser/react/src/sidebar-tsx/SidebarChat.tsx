@@ -28,10 +28,16 @@ import { WarningBox } from '../void-settings-tsx/WarningBox.js';
 import { filenameToVscodeLanguage } from '../../../../common/helpers/detectLanguage.js';
 import { getModelSelectionState, getModelCapabilities } from '../../../../common/modelCapabilities.js';
 import { AlertTriangle, ChevronRight, Dot, Pencil, X } from 'lucide-react';
+import { IFileDisplayInfo } from '../../../../common/fileSearchService.js';
 import { ChatMessage, StagingSelectionItem, ToolMessage, ToolRequestApproval } from '../../../../common/chatThreadServiceTypes.js';
 import { ToolCallParams, ToolName } from '../../../../common/toolsServiceTypes.js';
+import { text } from 'stream/consumers';
+import { clear } from 'console';
+import getCaretCoordinates from 'textarea-caret';
+import { DropdownKeyboardEvent } from '../util/inputs.js';
 
-
+// Test dropdown for files
+import { FileSelectBox } from '../void-settings-tsx/FileDropdown.js';
 
 export const IconX = ({ size, className = '', ...props }: { size: number, className?: string } & React.SVGProps<SVGSVGElement>) => {
 	return (
@@ -120,7 +126,7 @@ export const IconLoading = ({ className = '' }: { className?: string }) => {
 	const [loadingText, setLoadingText] = useState('.');
 
 	useEffect(() => {
-		let intervalId;
+		let intervalId: ReturnType<typeof setInterval>;
 
 		// Function to handle the animation
 		const toggleLoadingText = () => {
@@ -1411,6 +1417,121 @@ const ChatBubble = ({ chatMessage, isLoading, messageIdx }: ChatBubbleProps) => 
 
 }
 
+interface MentionsDropdownProps {
+	onFileAdded: (file: IFileDisplayInfo) => void;
+	onClose: () => void;
+	searchText?: string;
+}
+
+// const MentionsDropdown: React.FC<MentionsDropdownProps> = ({ onClose, onFileAdded, searchText }) => {
+
+// 	// Mention dropdown state
+// 	const accessor = useAccessor();
+// 	const repoFilesService = accessor.get('IRepoFilesService');
+// 	const chatThreadsService = accessor.get('IChatThreadService');
+// 	const [workspaceFiles, setWorkspaceFiles] = useState<IFileDisplayInfo[]>([]);
+// 	const [loading, setLoading] = useState(false);
+
+// 	const onSelectFile = (file: IFileDisplayInfo) => {
+// 		console.log("Adding file to staging: ", file.fileName)
+// 		// Add file to staging
+// 		try {
+// 			const currentThread = chatThreadsService.getCurrentThreadStagingSelections();
+// 			if (currentThread && !currentThread.some((s) => s.fileURI.fsPath === file.uri.fsPath)) {
+// 				chatThreadsService.setCurrentThreadStagingSelections([{
+// 					type: 'File',
+// 					fileURI: file.uri,
+// 					selectionStr: null,
+// 					range: null,
+// 				}, ...currentThread])
+// 			}
+// 			onFileAdded(file);
+// 		} catch (error) {
+// 			console.error('Error adding file to staging:', error);
+// 		}
+// 	}
+
+// 	// Add this effect to load and log files when component mounts
+// 	useEffect(() => {
+// 		const loadFiles = async () => {
+// 			try {
+// 				setLoading(true);
+// 				// Clean up state
+// 				setWorkspaceFiles([]);
+
+// 				const files = await repoFilesService.getFilesByName(searchText);
+
+// 				setWorkspaceFiles(files)
+// 			} catch (error) {
+// 				console.error('Error loading workspace files:', error);
+// 			} finally {
+// 				setLoading(false);
+// 			}
+// 		};
+// 		loadFiles()
+// 	}, [repoFilesService, searchText]);
+
+// 	// Close dropdown when clicking outside
+// 	useEffect(() => {
+// 		const handleClickOutside = (event: MouseEvent) => {
+// 			const target = event.target as HTMLElement;
+// 			if (!target.closest('.mentions-dropdown')) {
+// 				onClose();
+// 			}
+// 		};
+
+// 		document.addEventListener('click', handleClickOutside);
+// 		return () => document.removeEventListener('click', handleClickOutside);
+// 	}, [onClose]);
+
+// 	return (
+// 		<div
+// 			className="
+// 				mt-1
+// 				mb-8
+// 				bg-vscode-input-bg
+// 				border border-void-border-1
+// 				rounded-md
+// 				shadow-md
+// 				z-50
+// 				h-64
+// 				overflow-y-scroll
+// 			"
+// 		>
+// 			{loading ? (
+// 				<div className="flex justify-center items-center h-full">
+// 					<div className="loader ease-linear rounded-full border-4 border-t-4 border-gray-200 h-12 w-12 animate-spin"></div>
+// 				</div>
+// 			) : (
+// 				<ul className="mt-2 border-gray-700 rounded-lg divide-y divide-gray-500">
+// 					<div className="flex flex-col px-3 py-1 mb-2">
+// 						<span className="text-white-700 font-semibold">Type to search:</span>
+// 					</div>
+// 					{workspaceFiles.length === 0 ? (
+// 						<div className="flex flex-col px-3 py-2">
+// 							<span className="text-void-fg-3">No files found</span>
+// 						</div>
+// 					) : (
+// 						workspaceFiles.map((file, index) => (
+// 							<div
+// 								className="flex flex-col px-3 py-2 hover:bg-void-bg-3 cursor-pointer"
+// 								onClick={() => onSelectFile(file)}
+// 								key={index}
+// 							>
+// 								<span className="text-void-fg-1">{file.fileName}</span>
+// 								{file.hasDuplicate && file.shortPath && (
+// 									<span className="text-void-fg-3 text-xs">{file.shortPath}</span>
+// 								)}
+// 							</div>
+// 						))
+// 					)}
+// 				</ul>
+// 			)}
+// 		</div>
+// 	);
+// };
+
+
 
 export const SidebarChat = () => {
 
@@ -1434,6 +1555,7 @@ export const SidebarChat = () => {
 		)
 		return () => disposables.forEach(d => d.dispose())
 	}, [sidebarStateService, textAreaRef])
+
 
 	const { isHistoryOpen } = useSidebarState()
 
@@ -1464,6 +1586,18 @@ export const SidebarChat = () => {
 	const [sidebarRef, sidebarDimensions] = useResizeObserver()
 	const [chatAreaRef, chatAreaDimensions] = useResizeObserver()
 	const [historyRef, historyDimensions] = useResizeObserver()
+
+	// dropdown state
+    const [showDropdown, setShowDropdown] = useState(false);
+	const [searchText, setSearchText] = useState('');
+
+	// state for caret position
+	const [caretPosition, setCaretPosition] = useState({top: 0, left: 0, height: 0});
+	const [voidPanelIsRightSide, setVoidPanelIsRightSide] = useState(false);
+
+	// state for dropdown events
+	const [dropdownKeyboardEvent, setDropdownKeyboardEvent] = useState<DropdownKeyboardEvent | null>(null);
+
 
 	useScrollbarStyles(sidebarRef)
 
@@ -1569,15 +1703,114 @@ export const SidebarChat = () => {
 		}
 	</ScrollToBottomContainer>
 
+	const detectMentions = useCallback((text: string) => {
+		console.log('Detecting mentions (@) in:', text);
+		if (textAreaRef.current) {
+			// Remove previous search text and dropdown
+			setSearchText('')
+
+			const cursorPosition = textAreaRef.current.selectionStart;
+			const charBeforeCursor = text.charAt(cursorPosition - 1);
+			// Checking for a space before the @
+			const charBeforeCursor2 = text.charAt(cursorPosition - 2);
+
+			console.log('Char before cursor:', charBeforeCursor);
+
+			// If the cursor is at the beginning of the text or there is a space before the @
+			// then we can assume that the user is trying to mention @
+			if ((charBeforeCursor === '@' && charBeforeCursor2 === ' ') || (charBeforeCursor === '@' && cursorPosition === 1)) {
+				console.log('[Mentions] @ detected!');
+				// Show the dropdown
+				const isRightSided = () => {
+					if (!textAreaRef.current) return false;
+					const rect = textAreaRef.current.getBoundingClientRect();
+					// If the textbox is in the right half of the window
+					return rect.left > window.innerWidth / 2;
+				};
+				// Set the position of the dropdown
+				setVoidPanelIsRightSide(isRightSided());
+
+				const {top, left, height} = getCaretCoordinates(textAreaRef.current, cursorPosition);
+				const textAreaRect = textAreaRef.current.getBoundingClientRect();
+				setCaretPosition({
+					top: textAreaRect.top + top,
+					left: textAreaRect.left + left,
+					height: height,
+				});
+				// console.log("CARET COORDS!", JSON.stringify(position));
+				setShowDropdown(true);
+
+			// Check for "@" with text after (e.g. @anything_written_without_spaces)
+			} else if (text.substring(text.lastIndexOf(' ', cursorPosition - 1) + 1, cursorPosition).startsWith('@')) {
+				const atWithText = text.substring(text.lastIndexOf(' ', cursorPosition - 1) + 1, cursorPosition);
+				console.log('[Mentions] @ with text after detected!');
+
+				// Get the text after the @
+				const textAfterAt = atWithText.slice(atWithText.lastIndexOf('@') + 1);
+				console.log("Text after @:", textAfterAt);
+
+				// Update searchText
+				setSearchText(textAfterAt);
+				setShowDropdown(true);
+
+			// No @ detected
+			} else {
+				// Hide the dropdown
+				setShowDropdown(false);
+			}
+		}
+	}, [setShowDropdown, textAreaRef])
+
+	const handleOnFileAdded = (file: IFileDisplayInfo) => {
+		const updatedText = `@${file.fileName} `
+		const currentText = `@${searchText}`;
+		if (!textAreaRef.current) return;
+
+		// Clear the mention and search text
+		const cursorPosition = textAreaRef.current.selectionStart;
+		const textBeforeCursor = textAreaRef.current.value.substring(0, cursorPosition - currentText.length);
+		const newText = `${textBeforeCursor}`;
+		textAreaRef.current.value = newText;
+		textAreaRef.current.focus();
+
+		// Clear mentions state
+		clearMentions();
+    };
+
+	const handleMentionClose = () => {
+		clearMentions();
+	}
+
+	const clearMentions = () => {
+		setSearchText('');
+		setShowDropdown(false);
+		setDropdownKeyboardEvent(null);
+	}
+
+
 
 	const onChangeText = useCallback((newStr: string) => {
+		detectMentions(newStr);
 		setInstructionsAreEmpty(!newStr)
-	}, [setInstructionsAreEmpty])
+	}, [setInstructionsAreEmpty, detectMentions])
 	const onKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
-		if (e.key === 'Enter' && !e.shiftKey) {
-			onSubmit()
-		} else if (e.key === 'Escape' && isStreaming) {
-			onAbort()
+		if (showDropdown) {
+			// Handle dropdown events
+			if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter') {
+				// Navigate dropdown
+				e.preventDefault();
+				console.log('Dropdown event:', e.key);
+				setDropdownKeyboardEvent({
+					key: e.key,
+					timestamp: Date.now(),
+				 });
+			}
+		} else {
+			if (e.key === 'Enter' && !e.shiftKey) {
+				onSubmit()
+			} else if (e.key === 'Escape' && isStreaming) {
+				onAbort()
+			}
 		}
 	}, [onSubmit, onAbort, isStreaming])
 	const inputForm = <div className={`right-0 left-0 m-2 z-[999] overflow-hidden ${previousMessages.length > 0 ? 'absolute bottom-0' : ''}`}>
@@ -1593,16 +1826,27 @@ export const SidebarChat = () => {
 			setSelections={setSelections}
 			onClickAnywhere={() => { textAreaRef.current?.focus() }}
 		>
-			<VoidInputBox2
-				className='min-h-[81px] px-0.5'
-				placeholder={`${keybindingString ? `${keybindingString} to select. ` : ''}Enter instructions...`}
-				onChangeText={onChangeText}
-				onKeyDown={onKeyDown}
-				onFocus={() => { chatThreadsService.setFocusedMessageIdx(undefined) }}
-				ref={textAreaRef}
-				fnsRef={textAreaFnsRef}
-				multiline={true}
-			/>
+			<div className="flex flex-col overflow-hidden"> {/* Add this wrapper */}
+                <VoidInputBox2
+                    className='min-h-[81px] px-0.5'
+                    placeholder={`${keybindingString ? `${keybindingString} to select. ` : ''}Enter instructions...`}
+                    onChangeText={onChangeText}
+                    onKeyDown={onKeyDown}
+                    onFocus={() => { chatThreadsService.setFocusedMessageIdx(undefined) }}
+                    ref={textAreaRef}
+                    fnsRef={textAreaFnsRef}
+                    multiline={true}
+                />
+            </div>
+			{showDropdown && <FileSelectBox
+				searchText={searchText}
+				onClickOption={handleOnFileAdded}
+				onClose={handleMentionClose}
+				dropdownKeyboardEvent={dropdownKeyboardEvent}
+				position={caretPosition}
+				isTextAreaAtBottom={previousMessages.length > 0}
+				voidPanelIsRightSide={voidPanelIsRightSide}
+			/>}
 		</VoidChatArea>
 	</div>
 

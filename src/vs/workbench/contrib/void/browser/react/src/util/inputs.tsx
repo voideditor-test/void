@@ -3,7 +3,7 @@
  *  Licensed under the Apache License, Version 2.0. See LICENSE.txt for more information.
  *--------------------------------------------------------------------------------------*/
 
-import React, { forwardRef, MutableRefObject, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, { forwardRef, KeyboardEvent, MutableRefObject, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, ForwardedRef, use } from 'react';
 import { IInputBoxStyles, InputBox } from '../../../../../../../base/browser/ui/inputbox/inputBox.js';
 import { defaultCheckboxStyles, defaultInputBoxStyles, defaultSelectBoxStyles } from '../../../../../../../platform/theme/browser/defaultStyles.js';
 import { SelectBox } from '../../../../../../../base/browser/ui/selectBox/selectBox.js';
@@ -16,7 +16,6 @@ import { ITextModel } from '../../../../../../../editor/common/model.js';
 import { asCssVariable } from '../../../../../../../platform/theme/common/colorUtils.js';
 import { inputBackground, inputForeground } from '../../../../../../../platform/theme/common/colorRegistry.js';
 import { useFloating, autoUpdate, offset, flip, shift, size, autoPlacement } from '@floating-ui/react';
-
 
 // type guard
 const isConstructor = (f: any)
@@ -680,6 +679,292 @@ export const VoidCustomDropdownBox = <T extends any>({
 	);
 };
 
+export interface DropdownKeyboardEvent {
+	timestamp: number;  // The timestamp when the key was pressed (from Date.now())
+	key: 'ArrowDown' | 'ArrowUp' | 'Enter';  // The key that was pressed (in this case, "ArrowDown")
+}
+
+export const VoidCustomMentionDropdownBox = <T extends any>({
+    options,
+	totalOptionsNumber,
+	dropdownKeyboardEvent,
+    onClickOption,
+	onNextPage,
+	onClose,
+    getOptionDropdownName,
+    getOptionDropdownDetail,
+	getOptionDropdownKey,
+	isTextAreaAtBottom,
+	isRightSide,
+    className,
+    position = { top: 0, left: 0, height: 0 },
+    gap = 0,
+	isLoading = false,
+	noOptionsText = 'No options available',
+}: {
+    options: T[];
+	totalOptionsNumber: number;
+	dropdownKeyboardEvent: DropdownKeyboardEvent | null;
+    onClickOption: (clickedValue: T) => void;
+	onNextPage: () => void;
+	onClose: () => void;
+    getOptionDropdownName: (option: T) => string;
+	getOptionDropdownKey: (option: T) => string;
+    getOptionDropdownDetail?: (option: T) => string;
+	isTextAreaAtBottom: boolean;
+	isRightSide: boolean;
+    className?: string;
+    matchInputWidth?: boolean;
+    position?: { top: number; left: number; height: number };
+    width?: number;
+    gap?: number;
+	isLoading?: boolean;
+	noOptionsText?: string;
+}) => {
+    // const measureRef = useRef<HTMLDivElement>(null);
+	const [highlightedIndex, setHighlightedIndex] = useState<number>(0);
+    const dropdownRef = useRef<HTMLDivElement>(null);
+	const [isHovering, setIsHovering] = useState<number | null>(null);
+	const optionRefs = useRef<HTMLDivElement[]>([]);
+
+	const handleMouseEnter = (index: number) => {
+		setIsHovering(index);
+		setHighlightedIndex(index);
+	};
+
+	const handleMouseLeave = () => {
+		setIsHovering(null);
+	};
+
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            const target = event.target as Node;
+            if (
+                dropdownRef.current &&
+                !dropdownRef.current.contains(target)
+            ) {
+                // Have a function to handle the click outside the component to hide it
+            }
+        };
+
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [dropdownRef]);
+
+    const handleFileClick = (option: T) => {
+        onClickOption(option);
+    };
+
+	// Handle keyboard events
+	useEffect(() => {
+		if (!dropdownKeyboardEvent) return;
+		const handleKeyDown = (event: DropdownKeyboardEvent["key"]) => {
+			if (event === 'ArrowDown') {
+				setHighlightedIndex((highlightedIndex + 1) % options.length);
+			} else if (event === 'ArrowUp') {
+				if (highlightedIndex === 0) return;
+				setHighlightedIndex((highlightedIndex - 1 + options.length) % options.length);
+			} else if (event === 'Enter') {
+				if (options[highlightedIndex]) {
+					console.log("CLICKING OPTION")
+					handleFileClick(options[highlightedIndex]);
+				}
+			}
+		};
+		handleKeyDown(dropdownKeyboardEvent.key);
+	}, [dropdownKeyboardEvent, options.length]);
+
+	// Scroll to highlighted index
+	useEffect(() => {
+		if (highlightedIndex !== null && optionRefs.current[highlightedIndex]) {
+		  optionRefs.current[highlightedIndex].scrollIntoView({
+			behavior: 'smooth',
+			block: 'nearest',
+		  });
+		}
+	  }, [highlightedIndex]);
+
+	// Reset highlighted index when options change
+	useEffect(() => {
+		setHighlightedIndex(0);
+	}, [options]);
+
+	// Dropdown placement relative to the cursor
+	const cursorHeight = '25px';
+	const bottomLeft = 'translateX(-100%)';
+	const topLeft = `translate(-100%, calc(-100% - ${cursorHeight}))`;
+	const bottomRight = 'translateX(0)';
+	const topRight = `translate(0, calc(-100% - ${cursorHeight}))`;
+
+    return (
+        <div className={`inline-block absolute ${className}`}>
+
+            <div
+                ref={dropdownRef}
+                className="z-50 bg-void-bg-1 border-void-border-1 border overflow-hidden rounded shadow-lg"
+                style={{
+                    position: 'fixed',
+                    top: position.top + position.height + gap,
+                    left: position.left,
+                    width: 400,
+					height: 250,
+					overflowX: 'hidden',
+					transform: isRightSide ? (isTextAreaAtBottom ? topLeft : bottomLeft) : (isTextAreaAtBottom ? topRight : bottomRight),
+                }}
+            >
+                {isLoading ? (
+                    <div className="flex justify-center items-center h-full">
+                        {/* Simple spinner loader */}
+                        <div className="w-6 h-6 border-2 border-t-2 border-gray-500 rounded-full animate-spin"></div>
+                    </div>
+                ) : options.length === 0 ? (
+					<div className="flex justify-center items-center h-full">
+						<span>{noOptionsText}</span>
+					</div>
+				) : (
+					<VoidInfiniteScrollComponent
+					items={options}
+					dataLength={totalOptionsNumber}
+					next={onNextPage}
+					loadMore={true}
+					className="border rounded"
+					>
+						<div>
+							{options.map((option, index) => {
+								const optionKey = getOptionDropdownKey(option);
+								const optionName = getOptionDropdownName(option);
+								const optionDetail = getOptionDropdownDetail?.(option) || '';
+
+								return (
+									<div
+										key={optionKey}
+										ref={el => {
+											if (el) {
+												optionRefs.current[index] = el;
+											}
+										}}
+										className={`flex items-center px-2 py-1 cursor-pointer whitespace-nowrap transition-all duration-100 bg-void-bg-1 hover:bg-void-bg-2 ${index === highlightedIndex && !isHovering ? 'bg-void-bg-2' : ''}`}
+										onClick={() => handleFileClick(option)}
+										onMouseEnter={() => handleMouseEnter(index)}
+										onMouseLeave={handleMouseLeave}
+									>
+										<span className="flex justify-between w-full">
+											<span>{optionName}</span>
+											<span className='text-void-fg-4 opacity-60'>{optionDetail}</span>
+										</span>
+									</div>
+								);
+										}
+									)}
+						</div>
+					</VoidInfiniteScrollComponent>
+					)
+				}
+            </div>
+        </div>
+    );
+};
+
+interface VoidInfiniteScrollProps {
+	items: any[]; // The current list of items
+	dataLength: number; // Total number of items (could be more than items.length)
+	next: () => void; // Function to load more items
+	loadMore?: boolean; // Whether there are more items to load
+	loader?: React.ReactNode; // Optional loader component
+	inverse?: boolean; // Whether to use inverse scrolling (for chat interfaces)
+	className?: string; // Additional CSS classes
+	style?: React.CSSProperties; // Additional inline styles
+	children: React.ReactNode; // Slot for custom rendering
+}
+
+export const VoidInfiniteScrollComponent = ({
+	items,
+	dataLength,
+	next,
+	loadMore = true,
+	loader = <div className="text-center py-2">Loading...</div>,
+	inverse = false,
+	className = '',
+	style = {},
+	children,
+  }: VoidInfiniteScrollProps) => {
+	const divRef = useRef<HTMLDivElement | null>(null);
+
+	// Computed properties
+	const hasMore = items.length < dataLength;
+	const shouldLoadMore = loadMore && hasMore;
+
+
+	// Handle scroll events to trigger loading more items
+	useEffect(() => {
+		const div = divRef.current;
+		if (!div) return;
+		console.log("REGISTERING SCROLL EVENT")
+		const handleScroll = () => {
+			// Only trigger next() if we have more items to load
+			if (!loadMore) return;
+
+			if (inverse) {
+				// For inverse scrolling (chat-like interfaces) - load more when scrolled to top
+				if (div.scrollTop === 0) {
+					next();
+				}
+			} else {
+				// Normal scrolling - load more when scrolled near bottom
+				if (div.scrollTop + div.clientHeight >= div.scrollHeight - 30) {
+					// Check if we need to load more content when initial render doesn't fill the container
+					if (shouldLoadMore) {
+						next();
+					}
+				}
+			}
+		};
+
+		div.addEventListener('scroll', handleScroll);
+		return () => div.removeEventListener('scroll', handleScroll);
+	}, [next, loadMore, inverse]);
+
+	// Check if we need to load more content when initial render doesn't fill the container
+	useEffect(() => {
+		const div = divRef.current;
+		if (!div ) return;
+
+		// If container isn't filled and we have more data to load
+		// or if items.length is less than dataLength, trigger next
+		if (div.scrollHeight <= div.clientHeight && shouldLoadMore) {
+			next();
+		}
+	}, [items.length, dataLength, loadMore, next]);
+
+	// Auto-load more if items length is less than dataLength
+	// useEffect(() => {
+	// 	if (loadMore && items.length < dataLength) {
+	// 		next();
+	// 	}
+	// }, [items.length, dataLength, loadMore, next]);
+
+	const containerStyle: React.CSSProperties = {
+		border: 'none',
+		overflowY: 'auto',
+		overflowX: 'hidden',
+		height: '100%',
+		...style,
+		display: 'flex',
+		flexDirection: inverse ? 'column-reverse' : 'column',
+	};
+
+	return (
+		<div
+			ref={divRef}
+			className={`scroll-container ${className}`}
+			style={containerStyle}
+		>
+			{inverse && shouldLoadMore && loader}
+			{children}
+			{!inverse && shouldLoadMore && loader}
+		</div>
+	);
+};
 
 
 export const _VoidSelectBox = <T,>({ onChangeSelection, onCreateInstance, selectBoxRef, options, className }: {
