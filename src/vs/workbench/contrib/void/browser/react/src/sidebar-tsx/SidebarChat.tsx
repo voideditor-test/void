@@ -1289,7 +1289,6 @@ const toolNameToDesc = (toolName: ToolName, _toolParams: ToolCallParams[ToolName
 			const toolParams = _toolParams as ToolCallParams['search_in_file'];
 			return {
 				desc1: `"${toolParams.query}"`,
-				desc1Info: getRelative(toolParams.uri, accessor),
 			};
 		},
 		'create_file_or_folder': () => {
@@ -1758,9 +1757,7 @@ const toolNameToComponent: { [T in ToolName]: { resultWrapper: ResultWrapper<T>,
 					const rel = getRelative(params.searchInFolder, accessor)
 					if (rel) info.push(`Only search in ${rel}`)
 				}
-				if (params.isRegex) {
-					info.push(`Treat as regex`)
-				}
+				if (params.isRegex) { info.push(`Treat search as regex`) }
 				componentParams.info = info.join('; ')
 			}
 
@@ -1806,7 +1803,12 @@ const toolNameToComponent: { [T in ToolName]: { resultWrapper: ResultWrapper<T>,
 			const isError = toolMessage.type === 'tool_error';
 			const { rawParams, params } = toolMessage;
 			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon };
-			if (params.isRegex) componentParams.info = 'Treat as regex'
+
+			const infoarr: string[] = []
+			const uriStr = getRelative(params.uri, accessor)
+			if (uriStr) infoarr.push(uriStr)
+			if (params.isRegex) infoarr.push('Treat search as regex')
+			componentParams.info = infoarr.join('; ')
 
 			if (toolMessage.type === 'success') {
 				const { result } = toolMessage; // result is array of snippets
