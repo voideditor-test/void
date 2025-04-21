@@ -179,9 +179,11 @@ export class TerminalToolService extends Disposable implements ITerminalToolServ
 
 
 		const waitForResult = async () => {
-			// focus the terminal about to run
-			this.terminalService.setActiveInstance(terminal)
-			await this.terminalService.focusActiveInstance()
+			if (bgTerminalId) {
+				// focus the terminal about to run
+				this.terminalService.setActiveInstance(terminal)
+				await this.terminalService.focusActiveInstance()
+			}
 
 			let result: string = ''
 			let resolveReason: TerminalResolveReason | undefined = undefined
