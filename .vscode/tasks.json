@@ -89,6 +89,7 @@
 			"label": "VS Code - Build",
 			"dependsOn": [
 				"Core - Build",
+				"React - Build",
 				"Ext - Build"
 			],
 			"group": {
