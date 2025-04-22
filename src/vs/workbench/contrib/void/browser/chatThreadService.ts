@@ -587,8 +587,8 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		// above just defines helpers, below starts the actual function
 		const { chatMode } = this._settingsService.state.globalSettings // should not change as we loop even if user changes it, so it goes here
 
-		// clear any previous error
-		this._setStreamState(threadId, { error: undefined }, 'set')
+		// clear any previous error, and mark that it is running
+		this._setStreamState(threadId, { error: undefined, isRunning: 'LLM' }, 'set')
 
 		let nMessagesSent = 0
 		let shouldSendAnotherMessage = true
