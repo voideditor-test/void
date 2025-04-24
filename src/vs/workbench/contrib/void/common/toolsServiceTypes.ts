@@ -65,7 +65,7 @@ export type ToolResultType = {
 	'create_file_or_folder': {},
 	'delete_file_or_folder': {},
 	// ---
-	'run_command': { result: string; resolveReason: TerminalResolveReason; },
+	'run_command': { terminalId: string; result: string; resolveReason: TerminalResolveReason; },
 	'open_persistent_terminal': { persistentTerminalId: string },
 	'kill_persistent_terminal': {},
 }

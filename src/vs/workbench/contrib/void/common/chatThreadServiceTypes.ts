@@ -20,7 +20,7 @@ export type ToolMessage<T extends ToolName> = {
 
 		| { type: 'tool_request', result: null, name: T, params: ToolCallParams[T], }  // params were validated, awaiting user
 
-		| { type: 'running_now', result: null, name: T, params: ToolCallParams[T], }
+		| { type: 'running_now', result: null, name: T, params: ToolCallParams[T], preResult?: Awaited<Partial<ToolResultType[T]>> }
 
 		| { type: 'tool_error', result: string, name: T, params: ToolCallParams[T], } // error when tool was running
 		| { type: 'success', result: Awaited<ToolResultType[T]>, name: T, params: ToolCallParams[T], }

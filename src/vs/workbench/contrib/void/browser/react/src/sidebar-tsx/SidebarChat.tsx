@@ -2054,13 +2054,17 @@ const toolNameToComponent: { [T in ToolName]: { resultWrapper: ResultWrapper<T>,
 	'run_command': {
 		resultWrapper: ({ toolMessage }) => {
 			const accessor = useAccessor()
+
 			const commandService = accessor.get('ICommandService')
 			const terminalToolsService = accessor.get('ITerminalToolService')
 			const toolsService = accessor.get('IToolsService')
+			const terminalService = accessor.get('ITerminalService')
 			const isError = toolMessage.type === 'tool_error'
 			const title = getTitle(toolMessage)
 			const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor)
 			const icon = null
+
+			const divRef = useRef<HTMLDivElement | null>(null)
 
 			const isRejected = toolMessage.type === 'rejected'
 			const { rawParams, params } = toolMessage
@@ -2069,9 +2073,34 @@ const toolNameToComponent: { [T in ToolName]: { resultWrapper: ResultWrapper<T>,
 			const { command, persistentTerminalId } = params
 			if (persistentTerminalId) {
 				componentParams.desc2 = terminalNameOfId(persistentTerminalId)
-				componentParams.desc2OnClick = () => terminalToolsService.focusTerminal(persistentTerminalId)
+				componentParams.desc2OnClick = () => terminalToolsService.focusPersistentTerminal(persistentTerminalId)
 			}
 
+
+			const runningTerminalId = toolMessage.type === 'running_now' && toolMessage.preResult?.terminalId
+			useEffect(() => {
+				if (!runningTerminalId) return;
+				const container = divRef.current;
+				if (!container) return;
+				const t = terminalToolsService.getPersistentTerminal(runningTerminalId);
+				if (!t) return;
+
+				// Re-attach terminal to the new container
+				t.detachFromElement();
+				t.attachToElement(container);
+
+				// Listen for size changes
+				const resizeObserver = new ResizeObserver((entries) => {
+					const height = entries[0].borderBoxSize[0].blockSize
+					const width = entries[0].borderBoxSize[0].inlineSize
+					// Layout terminal to fit container dimensions
+					if (typeof t.layout === 'function') {
+						t.layout({ width, height });
+					}
+				})
+				resizeObserver.observe(container);
+				return () => { t.detachFromElement(); resizeObserver?.disconnect(); }
+			}, [runningTerminalId]);
 
 			if (toolMessage.type === 'success') {
 				const { result } = toolMessage
@@ -2102,7 +2131,10 @@ const toolNameToComponent: { [T in ToolName]: { resultWrapper: ResultWrapper<T>,
 				}
 			}
 
-			return <ToolHeaderWrapper {...componentParams} />
+			return <>
+				<ToolHeaderWrapper {...componentParams} />
+				<div ref={divRef} className='relative' />
+			</>
 		}
 	},
 
@@ -2127,7 +2159,7 @@ const toolNameToComponent: { [T in ToolName]: { resultWrapper: ResultWrapper<T>,
 				const { result } = toolMessage
 				const { persistentTerminalId } = result
 				componentParams.desc1 = terminalNameOfId(persistentTerminalId)
-				componentParams.onClick = () => terminalToolsService.focusTerminal(persistentTerminalId)
+				componentParams.onClick = () => terminalToolsService.focusPersistentTerminal(persistentTerminalId)
 			}
 			else if (toolMessage.type === 'tool_error') {
 				const { result } = toolMessage
@@ -2162,7 +2194,7 @@ const toolNameToComponent: { [T in ToolName]: { resultWrapper: ResultWrapper<T>,
 			if (toolMessage.type === 'success') {
 				const { persistentTerminalId } = params
 				componentParams.desc1 = terminalNameOfId(persistentTerminalId)
-				componentParams.onClick = () => terminalToolsService.focusTerminal(persistentTerminalId)
+				componentParams.onClick = () => terminalToolsService.focusPersistentTerminal(persistentTerminalId)
 			}
 			else if (toolMessage.type === 'tool_error') {
 				const { result } = toolMessage

@@ -27,7 +27,7 @@ import { IVoidSettingsService } from '../common/voidSettingsService.js'
 
 
 type ValidateParams = { [T in ToolName]: (p: RawToolParamsObj) => ToolCallParams[T] }
-type CallTool = { [T in ToolName]: (p: ToolCallParams[T]) => Promise<{ result: ToolResultType[T] | Promise<ToolResultType[T]>, interruptTool?: () => void }> }
+type CallTool = { [T in ToolName]: (p: ToolCallParams[T]) => Promise<{ preResult?: Partial<ToolResultType[T]>; result: ToolResultType[T] | Promise<ToolResultType[T]>, interruptTool?: () => void }> }
 type ToolResultToString = { [T in ToolName]: (p: ToolCallParams[T], result: Awaited<ToolResultType[T]>) => string }
 
 
@@ -417,17 +417,18 @@ export class ToolsService implements IToolsService {
 			run_command: async ({ command, persistentTerminalId }) => {
 				const { terminalId, resPromise } = await this.terminalToolService.runCommand(command, persistentTerminalId)
 				const interruptTool = () => {
-					this.terminalToolService.killTerminal(terminalId)
+					this.terminalToolService.killPersistentTerminal(terminalId)
 				}
-				return { result: resPromise, interruptTool }
+				const resPromise2 = resPromise.then(r => ({ ...r, terminalId }))
+				return { preResult: { terminalId }, result: resPromise2, interruptTool }
 			},
 			open_persistent_terminal: async () => {
-				const persistentTerminalId = await this.terminalToolService.createTerminal()
+				const persistentTerminalId = await this.terminalToolService.createPersistentTerminal()
 				return { result: { persistentTerminalId } }
 			},
 			kill_persistent_terminal: async ({ persistentTerminalId }) => {
 				// Close the background terminal by sending exit
-				await this.terminalToolService.killTerminal(persistentTerminalId)
+				await this.terminalToolService.killPersistentTerminal(persistentTerminalId)
 				return { result: {} }
 			},
 

@@ -17,13 +17,15 @@ import { TerminalResolveReason } from '../common/toolsServiceTypes.js';
 export interface ITerminalToolService {
 	readonly _serviceBrand: undefined;
 
-	listTerminalIds(): string[];
-	runCommand(command: string, bgTerminalId: string | null): Promise<{ terminalId: string, resPromise: Promise<{ result: string, resolveReason: TerminalResolveReason }> }>;
-	focusTerminal(terminalId: string): Promise<void>
-	terminalExists(terminalId: string): boolean
+	listPersistentTerminalIds(): string[];
+	runCommand(command: string, persistentTerminalId: string | null): Promise<{ terminalId: string, resPromise: Promise<{ result: string, resolveReason: TerminalResolveReason }> }>;
+	focusPersistentTerminal(terminalId: string): Promise<void>
+	persistentTerminalExists(terminalId: string): boolean
 
-	createTerminal(): Promise<string>
-	killTerminal(terminalId: string): Promise<void>
+	createPersistentTerminal(): Promise<string>
+	killPersistentTerminal(terminalId: string): Promise<void>
+
+	getPersistentTerminal(terminalId: string): ITerminalInstance | undefined
 }
 
 export const ITerminalToolService = createDecorator<ITerminalToolService>('TerminalToolService');
@@ -88,7 +90,7 @@ export class TerminalToolService extends Disposable implements ITerminalToolServ
 	}
 
 
-	listTerminalIds() {
+	listPersistentTerminalIds() {
 		return Object.keys(this.terminalInstanceOfId)
 	}
 
@@ -106,7 +108,7 @@ export class TerminalToolService extends Disposable implements ITerminalToolServ
 		throw new Error('This should never be reached by pigeonhole principle');
 	}
 
-	async createTerminal() {
+	async createPersistentTerminal() {
 		// create new terminal and return its ID
 		const terminalId = this.getValidNewTerminalId();
 		const terminal = await this.terminalService.createTerminal({
@@ -134,7 +136,7 @@ export class TerminalToolService extends Disposable implements ITerminalToolServ
 		return terminalId
 	}
 
-	async killTerminal(terminalId: string) {
+	async killPersistentTerminal(terminalId: string) {
 		const terminal = this.terminalInstanceOfId[terminalId]
 		if (!terminal) throw new Error(`Kill Terminal: Terminal with ID ${terminalId} did not exist.`);
 		terminal.dispose(TerminalExitReason.Extension)
@@ -142,12 +144,21 @@ export class TerminalToolService extends Disposable implements ITerminalToolServ
 		return
 	}
 
-	terminalExists(terminalId: string): boolean {
+	persistentTerminalExists(terminalId: string): boolean {
 		return terminalId in this.terminalInstanceOfId
 	}
 
 
-	focusTerminal: ITerminalToolService['focusTerminal'] = async (terminalId) => {
+
+	getPersistentTerminal(terminalId: string): ITerminalInstance | undefined {
+		if (!terminalId) return
+		const terminal = this.terminalInstanceOfId[terminalId]
+		if (!terminal) return // should never happen
+		return terminal
+	}
+
+
+	focusPersistentTerminal: ITerminalToolService['focusPersistentTerminal'] = async (terminalId) => {
 		if (!terminalId) return
 		const terminal = this.terminalInstanceOfId[terminalId]
 		if (!terminal) return // should never happen
@@ -158,21 +169,21 @@ export class TerminalToolService extends Disposable implements ITerminalToolServ
 
 
 
-	runCommand: ITerminalToolService['runCommand'] = async (command, bgTerminalId) => {
+	runCommand: ITerminalToolService['runCommand'] = async (command, persistentTerminalId) => {
 		await this.terminalService.whenConnected;
 
 		let terminal: ITerminalInstance
 		const disposables: IDisposable[] = []
 
-		const isBG = bgTerminalId !== null
+		const isBG = persistentTerminalId !== null
 		let terminalId: string
 		if (isBG) { // BG process
-			terminal = this.terminalInstanceOfId[bgTerminalId];
-			if (!terminal) throw new Error(`Unexpected internal error: Terminal with ID ${bgTerminalId} did not exist.`);
-			terminalId = bgTerminalId
+			terminal = this.terminalInstanceOfId[persistentTerminalId];
+			if (!terminal) throw new Error(`Unexpected internal error: Terminal with ID ${persistentTerminalId} did not exist.`);
+			terminalId = persistentTerminalId
 		}
 		else {
-			terminalId = await this.createTerminal()
+			terminalId = await this.createPersistentTerminal() // a hack
 			terminal = this.terminalInstanceOfId[terminalId]
 			if (!terminal) throw new Error(`Unexpected error: Terminal could not be created.`)
 		}
@@ -238,7 +249,7 @@ export class TerminalToolService extends Disposable implements ITerminalToolServ
 
 			disposables.forEach(d => d.dispose())
 			if (!isBG) {
-				await this.killTerminal(terminalId)
+				await this.killPersistentTerminal(terminalId) // a hack
 			}
 
 			if (!resolveReason) throw new Error('Unexpected internal error: Promise.any should have resolved with a reason.')
