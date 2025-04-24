@@ -49,6 +49,7 @@ import { INativeHostService } from '../../../../../../../platform/native/common/
 import { IEditCodeService } from '../../../editCodeServiceInterface.js'
 import { IToolsService } from '../../../toolsService.js'
 import { IConvertToLLMMessageService } from '../../../convertToLLMMessageService.js'
+import { ITerminalService } from '../../../../../terminal/browser/terminal.js'
 
 
 // normally to do this you'd use a useEffect that calls .onDidChangeState(), but useEffect mounts too late and misses initial state changes
@@ -219,6 +220,7 @@ const getReactAccessor = (accessor: ServicesAccessor) => {
 		INativeHostService: accessor.get(INativeHostService),
 		IToolsService: accessor.get(IToolsService),
 		IConvertToLLMMessageService: accessor.get(IConvertToLLMMessageService),
+		ITerminalService: accessor.get(ITerminalService),
 
 	} as const
 	return reactAccessor

@@ -527,11 +527,15 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 
 		// 3. call the tool
 		this._setStreamState(threadId, { isRunning: 'tool' }, 'merge')
-		this._updateLatestTool(threadId, { role: 'tool', type: 'running_now', name: toolName, params: toolParams, content: '(value not received yet...)', result: null, id: toolId, rawParams: opts.unvalidatedToolParams })
+
+		const runningTool = { role: 'tool', type: 'running_now', name: toolName, params: toolParams, content: '(value not received yet...)', result: null, id: toolId, rawParams: opts.unvalidatedToolParams } as const
+		this._updateLatestTool(threadId, runningTool)
 
 		let interrupted = false
 		try {
-			const { result, interruptTool } = await this._toolsService.callTool[toolName](toolParams as any)
+			const { preResult, result, interruptTool } = await this._toolsService.callTool[toolName](toolParams as any)
+			if (preResult) this._updateLatestTool(threadId, { ...runningTool, preResult })
+
 			this._currentlyRunningToolInterruptor[threadId] = () => {
 				interrupted = true;
 				interruptTool?.();
