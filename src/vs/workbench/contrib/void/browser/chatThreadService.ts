@@ -34,6 +34,7 @@ import { THREAD_STORAGE_KEY } from '../common/storageKeys.js';
 import { IConvertToLLMMessageService } from './convertToLLMMessageService.js';
 import { timeout } from '../../../../base/common/async.js';
 import { deepClone } from '../../../../base/common/objects.js';
+import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 
 
 // related to retrying when LLM message has error
@@ -213,7 +214,8 @@ export interface IChatThreadService {
 	// codespan links (link to symbols in the markdown)
 	getCodespanLink(opts: { codespanStr: string, messageIdx: number, threadId: string }): CodespanLocationLink | undefined;
 	addCodespanLink(opts: { newLinkText: string, newLinkLocation: CodespanLocationLink, messageIdx: number, threadId: string }): void;
-	generateCodespanLink(opts: { codespanStr: string, threadId: string }): Promise<CodespanLocationLink>
+	generateCodespanLink(opts: { codespanStr: string, threadId: string }): Promise<CodespanLocationLink>;
+	getRelativeStr(uri: URI): string | undefined
 
 	// entry pts
 	stopRunning(threadId: string): void;
@@ -263,6 +265,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		@IEditCodeService private readonly _editCodeService: IEditCodeService,
 		@INotificationService private readonly _notificationService: INotificationService,
 		@IConvertToLLMMessageService private readonly _convertToLLMMessagesService: IConvertToLLMMessageService,
+		@IWorkspaceContextService private readonly _workspaceContextService: IWorkspaceContextService,
 	) {
 		super()
 		this.state = { allThreads: {}, currentThreadId: null as unknown as string } // default state
@@ -1167,6 +1170,20 @@ We only need to do it for files that were edited since `from`, ie files between 
 	}
 
 
+
+	getRelativeStr = (uri: URI) => {
+		const isInside = this._workspaceContextService.isInsideWorkspace(uri)
+		if (isInside) {
+			const f = this._workspaceContextService.getWorkspace().folders.find(f => uri.fsPath.startsWith(f.uri.fsPath))
+			if (f) { return uri.fsPath.replace(f.uri.fsPath, '') }
+			else { return undefined }
+		}
+		else {
+			return undefined
+		}
+	}
+
+
 	// gets the location of codespan link so the user can click on it
 	generateCodespanLink: IChatThreadService['generateCodespanLink'] = async ({ codespanStr: _codespanStr, threadId }) => {
 
@@ -1271,7 +1288,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 					false, // searchOnlyEditableRange
 					false, // isRegex
 					true,  // matchCase
-					' ',   // wordSeparators
+					null, //' ',   // wordSeparators
 					true   // captureMatches
 				);
 

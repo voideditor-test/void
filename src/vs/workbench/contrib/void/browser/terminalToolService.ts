@@ -5,9 +5,11 @@
 
 import { Disposable, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { removeAnsiEscapeCodes } from '../../../../base/common/strings.js';
+import { URI } from '../../../../base/common/uri.js';
 import { registerSingleton, InstantiationType } from '../../../../platform/instantiation/common/extensions.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { TerminalExitReason, TerminalLocation } from '../../../../platform/terminal/common/terminal.js';
+import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { ITerminalService, ITerminalInstance } from '../../../../workbench/contrib/terminal/browser/terminal.js';
 import { MAX_TERMINAL_BG_COMMAND_TIME, MAX_TERMINAL_CHARS, MAX_TERMINAL_INACTIVE_TIME } from '../common/prompt/prompts.js';
 import { TerminalResolveReason } from '../common/toolsServiceTypes.js';
@@ -18,11 +20,11 @@ export interface ITerminalToolService {
 	readonly _serviceBrand: undefined;
 
 	listPersistentTerminalIds(): string[];
-	runCommand(command: string, persistentTerminalId: string | null): Promise<{ terminalId: string, resPromise: Promise<{ result: string, resolveReason: TerminalResolveReason }> }>;
+	runCommand(command: string, opts: { type: 'persistent', persistentTerminalId: string } | { type: 'ephemeral', cwd: string | null }): Promise<{ terminalId: string, resPromise: Promise<{ result: string, resolveReason: TerminalResolveReason }> }>;
 	focusPersistentTerminal(terminalId: string): Promise<void>
 	persistentTerminalExists(terminalId: string): boolean
 
-	createPersistentTerminal(): Promise<string>
+	createPersistentTerminal(opts: { cwd: string | null }): Promise<string>
 	killPersistentTerminal(terminalId: string): Promise<void>
 
 	getPersistentTerminal(terminalId: string): ITerminalInstance | undefined
@@ -61,6 +63,7 @@ export class TerminalToolService extends Disposable implements ITerminalToolServ
 
 	constructor(
 		@ITerminalService private readonly terminalService: ITerminalService,
+		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
 	) {
 		super();
 
@@ -108,10 +111,14 @@ export class TerminalToolService extends Disposable implements ITerminalToolServ
 		throw new Error('This should never be reached by pigeonhole principle');
 	}
 
-	async createPersistentTerminal() {
+	createPersistentTerminal: ITerminalToolService['createPersistentTerminal'] = async ({ cwd: override_cwd }) => {
+
+		const cwd: URI | string | undefined = (override_cwd ?? undefined) ?? this.workspaceContextService.getWorkspace().folders[0]?.uri
+
 		// create new terminal and return its ID
 		const terminalId = this.getValidNewTerminalId();
 		const terminal = await this.terminalService.createTerminal({
+			cwd: cwd,
 			location: TerminalLocation.Panel,
 			config: { name: terminalNameOfId(terminalId), title: terminalNameOfId(terminalId) },
 		})
@@ -169,28 +176,32 @@ export class TerminalToolService extends Disposable implements ITerminalToolServ
 
 
 
-	runCommand: ITerminalToolService['runCommand'] = async (command, persistentTerminalId) => {
+	runCommand: ITerminalToolService['runCommand'] = async (command, params) => {
+		const { type } = params
 		await this.terminalService.whenConnected;
 
 		let terminal: ITerminalInstance
 		const disposables: IDisposable[] = []
 
-		const isBG = persistentTerminalId !== null
+		const isPersistent = type === 'persistent'
+
 		let terminalId: string
-		if (isBG) { // BG process
+		if (isPersistent) { // BG process
+			const { persistentTerminalId } = params
 			terminal = this.terminalInstanceOfId[persistentTerminalId];
 			if (!terminal) throw new Error(`Unexpected internal error: Terminal with ID ${persistentTerminalId} did not exist.`);
 			terminalId = persistentTerminalId
 		}
 		else {
-			terminalId = await this.createPersistentTerminal() // a hack
+			const { cwd } = params
+			terminalId = await this.createPersistentTerminal({ cwd }) // a hack
 			terminal = this.terminalInstanceOfId[terminalId]
 			if (!terminal) throw new Error(`Unexpected error: Terminal could not be created.`)
 		}
 
 
 		const waitForResult = async () => {
-			if (isBG) {
+			if (isPersistent) {
 				// focus the terminal about to run
 				this.terminalService.setActiveInstance(terminal)
 				await this.terminalService.focusActiveInstance()
@@ -220,7 +231,7 @@ export class TerminalToolService extends Disposable implements ITerminalToolServ
 			// send the command here
 			await terminal.sendText(command, true)
 
-			const waitUntilInterrupt = isBG ?
+			const waitUntilInterrupt = isPersistent ?
 				// timeout after X seconds
 				new Promise<void>((res) => {
 					setTimeout(() => {
@@ -250,7 +261,7 @@ export class TerminalToolService extends Disposable implements ITerminalToolServ
 			await Promise.any([waitUntilDone, waitUntilInterrupt])
 
 			disposables.forEach(d => d.dispose())
-			if (!isBG) {
+			if (!isPersistent) {
 				await this.killPersistentTerminal(terminalId) // a hack
 			}
 

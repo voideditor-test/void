@@ -83,14 +83,6 @@ const validateNumber = (numStr: unknown, opts: { default: number | null }) => {
 	return opts.default
 }
 
-const validateRecursiveParamStr = (paramsUnknown: unknown) => {
-	if (!paramsUnknown) return false
-	if (typeof paramsUnknown !== 'string') throw new Error('Invalid LLM output format: Error calling tool: provided params must be a string.')
-	const params = paramsUnknown
-	const isRecursive = params.includes('r')
-	return isRecursive
-}
-
 const validateProposedTerminalId = (terminalIdUnknown: unknown) => {
 	if (!terminalIdUnknown) throw new Error(`A value for terminalID must be specified, but the value was "${terminalIdUnknown}"`)
 	const terminalId = terminalIdUnknown + ''
@@ -233,9 +225,9 @@ export class ToolsService implements IToolsService {
 			},
 
 			delete_file_or_folder: (params: RawToolParamsObj) => {
-				const { uri: uriUnknown, params: paramsStr } = params
+				const { uri: uriUnknown, is_recursive: isRecursiveUnknown } = params
 				const uri = validateURI(uriUnknown)
-				const isRecursive = validateRecursiveParamStr(paramsStr)
+				const isRecursive = validateBoolean(isRecursiveUnknown, { default: false })
 				const uriStr = validateStr('uri', uriUnknown)
 				const isFolder = checkIfIsFolder(uriStr)
 				return { uri, isRecursive, isFolder }
@@ -251,14 +243,22 @@ export class ToolsService implements IToolsService {
 			// ---
 
 			run_command: (params: RawToolParamsObj) => {
-				const { command: commandUnknown, persistent_terminal_id: terminalIdUnknown } = params;
+				const { command: commandUnknown, cwd: cwdUnknown } = params;
 				const command = validateStr('command', commandUnknown);
-				const persistentTerminalId = terminalIdUnknown ? validateProposedTerminalId(terminalIdUnknown) : null;
+				const cwd = validateOptionalStr('cwd', cwdUnknown)
+				return { command, cwd };
+			},
+			run_persistent_command: (params: RawToolParamsObj) => {
+				const { command: commandUnknown, persistent_terminal_id: persistentTerminalIdUnknown } = params;
+				const command = validateStr('command', commandUnknown);
+				const persistentTerminalId = validateProposedTerminalId(persistentTerminalIdUnknown)
 				return { command, persistentTerminalId };
 			},
-			open_persistent_terminal: (_params: RawToolParamsObj) => {
+			open_persistent_terminal: (params: RawToolParamsObj) => {
+				const { cwd: cwdUnknown } = params;
+				const cwd = validateOptionalStr('cwd', cwdUnknown)
 				// No parameters needed; will open a new background terminal
-				return {};
+				return { cwd };
 			},
 			kill_persistent_terminal: (params: RawToolParamsObj) => {
 				const { persistent_terminal_id: terminalIdUnknown } = params;
@@ -414,16 +414,24 @@ export class ToolsService implements IToolsService {
 				return { result: lintErrorsPromise, interruptTool }
 			},
 			// ---
-			run_command: async ({ command, persistentTerminalId }) => {
-				const { terminalId, resPromise } = await this.terminalToolService.runCommand(command, persistentTerminalId)
+			run_command: async ({ command, cwd }) => {
+				const { terminalId, resPromise } = await this.terminalToolService.runCommand(command, { type: 'ephemeral', cwd })
 				const interruptTool = () => {
 					this.terminalToolService.killPersistentTerminal(terminalId)
 				}
 				const resPromise2 = resPromise.then(r => ({ ...r, terminalId }))
 				return { preResult: { terminalId }, result: resPromise2, interruptTool }
 			},
-			open_persistent_terminal: async () => {
-				const persistentTerminalId = await this.terminalToolService.createPersistentTerminal()
+			run_persistent_command: async ({ command, persistentTerminalId }) => {
+				const { terminalId, resPromise } = await this.terminalToolService.runCommand(command, { type: 'persistent', persistentTerminalId })
+				const interruptTool = () => {
+					this.terminalToolService.killPersistentTerminal(terminalId)
+				}
+				const resPromise2 = resPromise.then(r => ({ ...r, terminalId }))
+				return { preResult: { terminalId }, result: resPromise2, interruptTool }
+			},
+			open_persistent_terminal: async ({ cwd }) => {
+				const persistentTerminalId = await this.terminalToolService.createPersistentTerminal({ cwd })
 				return { result: { persistentTerminalId } }
 			},
 			kill_persistent_terminal: async ({ persistentTerminalId }) => {
@@ -493,33 +501,34 @@ export class ToolsService implements IToolsService {
 				return `Change successfully made to ${params.uri.fsPath}.${lintErrsString}`
 			},
 			run_command: (params, result) => {
-				const {
-					resolveReason,
-					result: result_,
-				} = result
-				const { persistentTerminalId } = params
-
+				const { resolveReason, result: result_, } = result
 				// success
 				if (resolveReason.type === 'done') {
-					const desc = persistentTerminalId ? ` in terminal ${persistentTerminalId}` : ''
+					const desc = ''
 					return `Terminal command executed and finished${desc}. Result (exit code ${resolveReason.exitCode}):\n${result_}`
 				}
-
-				// bg command
-				if (persistentTerminalId !== null) {
-					if (resolveReason.type === 'timeout') {
-						return `Terminal command is running in terminal ${persistentTerminalId}. Here are the current outputs (after ${MAX_TERMINAL_BG_COMMAND_TIME} seconds):\n${result_}`
-					}
-				}
 				// normal command
-				else {
-					if (resolveReason.type === 'timeout') {
-						return `Terminal command ran, but was interrupted after ${MAX_TERMINAL_INACTIVE_TIME}s of inactivity and did not necessarily finish successfully. Full output:\n${result_}`
-					}
+				if (resolveReason.type === 'timeout') {
+					return `Terminal command ran, but was interrupted after ${MAX_TERMINAL_INACTIVE_TIME}s of inactivity and did not necessarily finish successfully. Full output:\n${result_}`
 				}
-
 				throw new Error(`Unexpected internal error: Terminal command did not resolve with a valid reason.`)
 			},
+
+			run_persistent_command: (params, result) => {
+				const { resolveReason, result: result_, } = result
+				const { persistentTerminalId } = params
+				// success
+				if (resolveReason.type === 'done') {
+					const desc = ` in terminal ${persistentTerminalId}`
+					return `Terminal command executed and finished${desc}. Result (exit code ${resolveReason.exitCode}):\n${result_}`
+				}
+				// bg command
+				if (resolveReason.type === 'timeout') {
+					return `Terminal command is running in terminal ${persistentTerminalId}. Here are the current outputs (after ${MAX_TERMINAL_BG_COMMAND_TIME} seconds):\n${result_}`
+				}
+				throw new Error(`Unexpected internal error: Terminal command did not resolve with a valid reason.`)
+			},
+
 			open_persistent_terminal: (_params, result) => {
 				const { persistentTerminalId } = result;
 				return `Successfully created persistent terminal. persistentTerminalId="${persistentTerminalId}"`;

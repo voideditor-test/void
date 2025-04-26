@@ -465,19 +465,10 @@ const ScrollToBottomContainer = ({ children, className, style, scrollContainerRe
 	);
 };
 
-const getRelative = (uri: URI, accessor: ReturnType<typeof useAccessor>) => {
-	const workspaceContextService = accessor.get('IWorkspaceContextService')
-	let path: string
-	const isInside = workspaceContextService.isInsideWorkspace(uri)
-	if (isInside) {
-		const f = workspaceContextService.getWorkspace().folders.find(f => uri.fsPath.startsWith(f.uri.fsPath))
-		if (f) { path = uri.fsPath.replace(f.uri.fsPath, '') }
-		else { path = uri.fsPath }
-	}
-	else {
-		path = uri.fsPath
-	}
-	return path || undefined
+
+export const getRelative = (uri: URI, accessor: ReturnType<typeof useAccessor>) => {
+	const chatThreadService = accessor.get('IChatThreadService')
+	return chatThreadService.getRelativeStr(uri) || uri.fsPath
 }
 
 export const getFolderName = (pathStr: string) => {
@@ -1234,9 +1225,13 @@ const titleOfToolName = {
 	'create_file_or_folder': { done: `Created`, proposed: `Create`, running: loadingTitleWrapper(`Creating`) },
 	'delete_file_or_folder': { done: `Deleted`, proposed: `Delete`, running: loadingTitleWrapper(`Deleting`) },
 	'edit_file': { done: `Edited file`, proposed: 'Edit file', running: loadingTitleWrapper('Editing file') },
+
 	'run_command': { done: `Ran terminal`, proposed: 'Run terminal', running: loadingTitleWrapper('Running terminal') },
+	'run_persistent_command': { done: `Ran terminal`, proposed: 'Run terminal', running: loadingTitleWrapper('Running terminal') },
+
 	'open_persistent_terminal': { done: `Opened terminal`, proposed: 'Open terminal', running: loadingTitleWrapper('Opening terminal') },
 	'kill_persistent_terminal': { done: `Killed terminal`, proposed: 'Kill terminal', running: loadingTitleWrapper('Killing terminal') },
+
 	'read_lint_errors': { done: `Read lint errors`, proposed: 'Read lint errors', running: loadingTitleWrapper('Reading lint errors') },
 	'search_in_file': { done: 'Searched in file', proposed: 'Search in file', running: loadingTitleWrapper('Searching in file') },
 } as const satisfies Record<ToolName, { done: any, proposed: any, running: any }>
@@ -1319,7 +1314,12 @@ const toolNameToDesc = (toolName: ToolName, _toolParams: ToolCallParams[ToolName
 			const toolParams = _toolParams as ToolCallParams['run_command']
 			return {
 				desc1: `"${toolParams.command}"`,
-				desc1Info: toolParams.persistentTerminalId
+			}
+		},
+		'run_persistent_command': () => {
+			const toolParams = _toolParams as ToolCallParams['run_persistent_command']
+			return {
+				desc1: `"${toolParams.command}"`,
 			}
 		},
 		'open_persistent_terminal': () => {
@@ -1538,6 +1538,105 @@ const CanceledTool = ({ toolName }: { toolName: ToolName }) => {
 	return <ToolHeaderWrapper {...componentParams} />
 }
 
+
+
+const CommandTool = ({ toolMessage, type }: {
+	toolMessage: Exclude<ToolMessage<'run_command'>, { type: 'invalid_params' }>
+	type: 'run_command'
+} | {
+	toolMessage: Exclude<ToolMessage<'run_persistent_command'>, { type: 'invalid_params' }>
+	type: | 'run_persistent_command'
+}) => {
+	const accessor = useAccessor()
+
+	const commandService = accessor.get('ICommandService')
+	const terminalToolsService = accessor.get('ITerminalToolService')
+	const toolsService = accessor.get('IToolsService')
+	const terminalService = accessor.get('ITerminalService')
+	const isError = toolMessage.type === 'tool_error'
+	const title = getTitle(toolMessage)
+	const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor)
+	const icon = null
+
+	const divRef = useRef<HTMLDivElement | null>(null)
+
+	const isRejected = toolMessage.type === 'rejected'
+	const { rawParams, params } = toolMessage
+	const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, isRejected, }
+
+	const { command } = params
+	if (type === 'run_command') {
+		const { cwd } = toolMessage.params
+		componentParams.info = cwd ? `Running in ${getRelative(URI.file(cwd), accessor)}` : ''
+	}
+
+	const runningTerminalId = toolMessage.type === 'running_now' && toolMessage.preResult?.terminalId
+	useEffect(() => {
+		if (!runningTerminalId) return;
+		const container = divRef.current;
+		if (!container) return;
+		const t = terminalToolsService.getPersistentTerminal(runningTerminalId);
+		if (!t) return;
+
+		// Re-attach terminal to the new container
+		t.detachFromElement();
+		t.attachToElement(container);
+
+		// Listen for size changes
+		const resizeObserver = new ResizeObserver((entries) => {
+			const height = entries[0].borderBoxSize[0].blockSize
+			const width = entries[0].borderBoxSize[0].inlineSize
+			// Layout terminal to fit container dimensions
+			if (typeof t.layout === 'function') {
+				t.layout({ width, height });
+			}
+		})
+		resizeObserver.observe(container);
+		return () => { t.detachFromElement(); resizeObserver?.disconnect(); }
+	}, [runningTerminalId]);
+
+	if (toolMessage.type === 'success') {
+		const { result } = toolMessage
+
+		// it's unclear that this is a button and not an icon.
+		// componentParams.desc2 = <JumpToTerminalButton
+		// 	onClick={() => { terminalToolsService.openTerminal(terminalId) }}
+		// />
+
+		let msg: string
+		if (type === 'run_command')
+			msg = toolsService.stringOfResult['run_command'](toolMessage.params, result)
+		else
+			msg = toolsService.stringOfResult['run_persistent_command'](toolMessage.params, result)
+
+
+		componentParams.children = <ToolChildrenWrapper className='whitespace-pre text-nowrap overflow-auto text-sm'>
+			<div className='!select-text cursor-auto'>
+				<div>
+					<span className="text-void-fg-1 font-sans">{`Ran command: `}</span>
+					<span className="font-mono">{command}</span>
+				</div>
+				{msg.length && <div>
+					<span className='text-void-fg-1'>{`Result: `}</span>
+					<span className="font-mono">{msg}</span>
+				</div>}
+			</div>
+		</ToolChildrenWrapper>
+	}
+	else if (toolMessage.type === 'rejected' || toolMessage.type === 'tool_error' || toolMessage.type === 'running_now' || toolMessage.type === 'tool_request') {
+		if (toolMessage.type === 'tool_error') {
+			const { result } = toolMessage
+			componentParams.children = <ToolChildrenWrapper>
+				{result}
+				<div ref={divRef} className='relative' />
+			</ToolChildrenWrapper>
+		}
+	}
+
+	return <>
+		<ToolHeaderWrapper {...componentParams} />
+	</>
+}
 
 type ResultWrapper<T extends ToolName> = (props: { toolMessage: Exclude<ToolMessage<T>, { type: 'invalid_params' }>, messageIdx: number, threadId: string }) => React.ReactNode
 const toolNameToComponent: { [T in ToolName]: { resultWrapper: ResultWrapper<T>, } } = {
@@ -2054,92 +2153,16 @@ const toolNameToComponent: { [T in ToolName]: { resultWrapper: ResultWrapper<T>,
 	// ---
 
 	'run_command': {
-		resultWrapper: ({ toolMessage }) => {
-			const accessor = useAccessor()
-
-			const commandService = accessor.get('ICommandService')
-			const terminalToolsService = accessor.get('ITerminalToolService')
-			const toolsService = accessor.get('IToolsService')
-			const terminalService = accessor.get('ITerminalService')
-			const isError = toolMessage.type === 'tool_error'
-			const title = getTitle(toolMessage)
-			const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor)
-			const icon = null
-
-			const divRef = useRef<HTMLDivElement | null>(null)
-
-			const isRejected = toolMessage.type === 'rejected'
-			const { rawParams, params } = toolMessage
-			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, isRejected, }
-
-			const { command, persistentTerminalId } = params
-			if (persistentTerminalId) {
-				componentParams.desc2 = terminalNameOfId(persistentTerminalId)
-				componentParams.desc2OnClick = () => terminalToolsService.focusPersistentTerminal(persistentTerminalId)
-			}
-
-
-			const runningTerminalId = toolMessage.type === 'running_now' && toolMessage.preResult?.terminalId
-			useEffect(() => {
-				if (!runningTerminalId) return;
-				const container = divRef.current;
-				if (!container) return;
-				const t = terminalToolsService.getPersistentTerminal(runningTerminalId);
-				if (!t) return;
-
-				// Re-attach terminal to the new container
-				t.detachFromElement();
-				t.attachToElement(container);
-
-				// Listen for size changes
-				const resizeObserver = new ResizeObserver((entries) => {
-					const height = entries[0].borderBoxSize[0].blockSize
-					const width = entries[0].borderBoxSize[0].inlineSize
-					// Layout terminal to fit container dimensions
-					if (typeof t.layout === 'function') {
-						t.layout({ width, height });
-					}
-				})
-				resizeObserver.observe(container);
-				return () => { t.detachFromElement(); resizeObserver?.disconnect(); }
-			}, [runningTerminalId]);
-
-			if (toolMessage.type === 'success') {
-				const { result } = toolMessage
-
-				// it's unclear that this is a button and not an icon.
-				// componentParams.desc2 = <JumpToTerminalButton
-				// 	onClick={() => { terminalToolsService.openTerminal(terminalId) }}
-				// />
-				const msg = toolsService.stringOfResult['run_command'](params, result)
-
-				componentParams.children = <ToolChildrenWrapper className='whitespace-pre text-nowrap overflow-auto text-sm'>
-					<div className='!select-text cursor-auto'>
-						<div>
-							<span className="text-void-fg-1 font-sans">{`Ran command: `}</span>
-							<span className="font-mono">{command}</span>
-						</div>
-						{msg.length && <div>
-							<span className='text-void-fg-1'>{`Result: `}</span>
-							<span className="font-mono">{msg}</span>
-						</div>}
-					</div>
-				</ToolChildrenWrapper>
-			}
-			else if (toolMessage.type === 'rejected' || toolMessage.type === 'tool_error' || toolMessage.type === 'running_now' || toolMessage.type === 'tool_request') {
-				if (toolMessage.type === 'tool_error') {
-					const { result } = toolMessage
-					componentParams.children = <ToolChildrenWrapper>{result}</ToolChildrenWrapper>
-				}
-			}
-
-			return <>
-				<ToolHeaderWrapper {...componentParams} />
-				<div ref={divRef} className='relative' />
-			</>
+		resultWrapper: (params) => {
+			return <CommandTool {...params} type='run_command' />
 		}
 	},
 
+	'run_persistent_command': {
+		resultWrapper: (params) => {
+			return <CommandTool {...params} type='run_persistent_command' />
+		}
+	},
 	'open_persistent_terminal': {
 		resultWrapper: ({ toolMessage }) => {
 			const accessor = useAccessor()
@@ -2157,6 +2180,7 @@ const toolNameToComponent: { [T in ToolName]: { resultWrapper: ResultWrapper<T>,
 			const { rawParams, params } = toolMessage
 			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, }
 
+			componentParams.info = params.cwd ? `Running in ${getRelative(URI.file(params.cwd), accessor)}` : ''
 			if (toolMessage.type === 'success') {
 				const { result } = toolMessage
 				const { persistentTerminalId } = result
