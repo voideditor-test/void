@@ -19,6 +19,7 @@ import { timeout } from '../../../../base/common/async.js'
 import { RawToolParamsObj } from '../common/sendLLMMessageTypes.js'
 import { MAX_CHILDREN_URIs_PAGE, MAX_FILE_CHARS_PAGE, MAX_TERMINAL_BG_COMMAND_TIME, MAX_TERMINAL_INACTIVE_TIME, ToolName } from '../common/prompt/prompts.js'
 import { IVoidSettingsService } from '../common/voidSettingsService.js'
+import { generateUuid } from '../../../../base/common/uuid.js'
 
 
 // tool use for AI
@@ -27,7 +28,7 @@ import { IVoidSettingsService } from '../common/voidSettingsService.js'
 
 
 type ValidateParams = { [T in ToolName]: (p: RawToolParamsObj) => ToolCallParams[T] }
-type CallTool = { [T in ToolName]: (p: ToolCallParams[T]) => Promise<{ preResult?: Partial<ToolResultType[T]>; result: ToolResultType[T] | Promise<ToolResultType[T]>, interruptTool?: () => void }> }
+type CallTool = { [T in ToolName]: (p: ToolCallParams[T]) => Promise<{ result: ToolResultType[T] | Promise<ToolResultType[T]>, interruptTool?: () => void }> }
 type ToolResultToString = { [T in ToolName]: (p: ToolCallParams[T], result: Awaited<ToolResultType[T]>) => string }
 
 
@@ -243,10 +244,11 @@ export class ToolsService implements IToolsService {
 			// ---
 
 			run_command: (params: RawToolParamsObj) => {
-				const { command: commandUnknown, cwd: cwdUnknown } = params;
-				const command = validateStr('command', commandUnknown);
+				const { command: commandUnknown, cwd: cwdUnknown } = params
+				const command = validateStr('command', commandUnknown)
 				const cwd = validateOptionalStr('cwd', cwdUnknown)
-				return { command, cwd };
+				const terminalId = generateUuid()
+				return { command, cwd, terminalId }
 			},
 			run_persistent_command: (params: RawToolParamsObj) => {
 				const { command: commandUnknown, persistent_terminal_id: persistentTerminalIdUnknown } = params;
@@ -414,21 +416,15 @@ export class ToolsService implements IToolsService {
 				return { result: lintErrorsPromise, interruptTool }
 			},
 			// ---
-			run_command: async ({ command, cwd }) => {
-				const { terminalId, resPromise } = await this.terminalToolService.runCommand(command, { type: 'ephemeral', cwd })
-				const interruptTool = () => {
-					this.terminalToolService.killPersistentTerminal(terminalId)
-				}
-				const resPromise2 = resPromise.then(r => ({ ...r, terminalId }))
-				return { preResult: { terminalId }, result: resPromise2, interruptTool }
+			run_command: async ({ command, cwd, terminalId }) => {
+				const { resPromise, interrupt } = await this.terminalToolService.runCommand(command, { type: 'ephemeral', cwd, terminalId })
+				console.log('qqq', interrupt)
+				return { result: resPromise, interruptTool: interrupt }
 			},
 			run_persistent_command: async ({ command, persistentTerminalId }) => {
-				const { terminalId, resPromise } = await this.terminalToolService.runCommand(command, { type: 'persistent', persistentTerminalId })
-				const interruptTool = () => {
-					this.terminalToolService.killPersistentTerminal(terminalId)
-				}
-				const resPromise2 = resPromise.then(r => ({ ...r, terminalId }))
-				return { preResult: { terminalId }, result: resPromise2, interruptTool }
+				const { resPromise, interrupt } = await this.terminalToolService.runCommand(command, { type: 'persistent', persistentTerminalId })
+				console.log('qqq', interrupt)
+				return { result: resPromise, interruptTool: interrupt }
 			},
 			open_persistent_terminal: async ({ cwd }) => {
 				const persistentTerminalId = await this.terminalToolService.createPersistentTerminal({ cwd })
@@ -504,12 +500,11 @@ export class ToolsService implements IToolsService {
 				const { resolveReason, result: result_, } = result
 				// success
 				if (resolveReason.type === 'done') {
-					const desc = ''
-					return `Terminal command executed and finished${desc}. Result (exit code ${resolveReason.exitCode}):\n${result_}`
+					return `${result_}\n(exit code ${resolveReason.exitCode})`
 				}
 				// normal command
 				if (resolveReason.type === 'timeout') {
-					return `Terminal command ran, but was interrupted after ${MAX_TERMINAL_INACTIVE_TIME}s of inactivity and did not necessarily finish successfully. Full output:\n${result_}`
+					return `${result_}\nTerminal command ran, but was interrupted by Void after ${MAX_TERMINAL_INACTIVE_TIME}s of inactivity and did not necessarily finish successfully.`
 				}
 				throw new Error(`Unexpected internal error: Terminal command did not resolve with a valid reason.`)
 			},
@@ -519,12 +514,11 @@ export class ToolsService implements IToolsService {
 				const { persistentTerminalId } = params
 				// success
 				if (resolveReason.type === 'done') {
-					const desc = ` in terminal ${persistentTerminalId}`
-					return `Terminal command executed and finished${desc}. Result (exit code ${resolveReason.exitCode}):\n${result_}`
+					return `${result_}\n(exit code ${resolveReason.exitCode})`
 				}
 				// bg command
 				if (resolveReason.type === 'timeout') {
-					return `Terminal command is running in terminal ${persistentTerminalId}. Here are the current outputs (after ${MAX_TERMINAL_BG_COMMAND_TIME} seconds):\n${result_}`
+					return `${result_}\nTerminal command is running in terminal ${persistentTerminalId}. The given outputs are the results after ${MAX_TERMINAL_BG_COMMAND_TIME} seconds.`
 				}
 				throw new Error(`Unexpected internal error: Terminal command did not resolve with a valid reason.`)
 			},

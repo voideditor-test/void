@@ -30,7 +30,7 @@ import { MAX_FILE_CHARS_PAGE, MAX_TERMINAL_INACTIVE_TIME, ToolName, toolNames } 
 import { RawToolCallObj } from '../../../../common/sendLLMMessageTypes.js';
 import ErrorBoundary from './ErrorBoundary.js';
 import { ToolApprovalTypeSwitch } from '../void-settings-tsx/Settings.js';
-import { terminalNameOfId } from '../../../terminalToolService.js';
+import { persistentTerminalNameOfId } from '../../../terminalToolService.js';
 
 
 
@@ -919,7 +919,7 @@ const UserMessageComponent = ({ chatMessage, messageIdx, isCheckpointGhost, curr
 
 			// cancel any streams on this thread
 			const threadId = chatThreadsService.state.currentThreadId
-			chatThreadsService.stopRunning(threadId)
+			await chatThreadsService.abortRunning(threadId)
 
 			// update state
 			setIsBeingEdited(false)
@@ -936,9 +936,9 @@ const UserMessageComponent = ({ chatMessage, messageIdx, isCheckpointGhost, curr
 			requestAnimationFrame(() => _scrollToBottom?.())
 		}
 
-		const onAbort = () => {
+		const onAbort = async () => {
 			const threadId = chatThreadsService.state.currentThreadId
-			chatThreadsService.stopRunning(threadId)
+			await chatThreadsService.abortRunning(threadId)
 		}
 
 		const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1564,36 +1564,34 @@ const CommandTool = ({ toolMessage, type }: {
 	const { rawParams, params } = toolMessage
 	const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, isRejected, }
 
-	const { command } = params
-	if (type === 'run_command') {
-		const { cwd } = toolMessage.params
-		componentParams.info = cwd ? `Running in ${getRelative(URI.file(cwd), accessor)}` : ''
-	}
-
-	const runningTerminalId = toolMessage.type === 'running_now' && toolMessage.preResult?.terminalId
 	useEffect(() => {
-		if (!runningTerminalId) return;
+		if (type !== 'run_command' || toolMessage.type !== 'running_now') return;
+
 		const container = divRef.current;
 		if (!container) return;
-		const t = terminalToolsService.getPersistentTerminal(runningTerminalId);
-		if (!t) return;
 
+		const terminal = terminalToolsService.getTemporaryTerminal(toolMessage.params.terminalId);
+		if (!terminal) return;
+
+		terminal.detachFromElement();
 		// Re-attach terminal to the new container
-		t.detachFromElement();
-		t.attachToElement(container);
+		terminal.attachToElement(container);
 
 		// Listen for size changes
 		const resizeObserver = new ResizeObserver((entries) => {
+			console.log('calling resize')
 			const height = entries[0].borderBoxSize[0].blockSize
 			const width = entries[0].borderBoxSize[0].inlineSize
 			// Layout terminal to fit container dimensions
-			if (typeof t.layout === 'function') {
-				t.layout({ width, height });
+			if (typeof terminal.layout === 'function') {
+				console.log('laying out ', height, width, container)
+				terminal.layout({ width, height });
 			}
 		})
+
 		resizeObserver.observe(container);
-		return () => { t.detachFromElement(); resizeObserver?.disconnect(); }
-	}, [runningTerminalId]);
+		return () => { terminal.detachFromElement(); resizeObserver?.disconnect(); }
+	}, [terminalToolsService, toolMessage, toolMessage.type, type]);
 
 	if (toolMessage.type === 'success') {
 		const { result } = toolMessage
@@ -1604,37 +1602,31 @@ const CommandTool = ({ toolMessage, type }: {
 		// />
 
 		let msg: string
-		if (type === 'run_command')
-			msg = toolsService.stringOfResult['run_command'](toolMessage.params, result)
-		else
-			msg = toolsService.stringOfResult['run_persistent_command'](toolMessage.params, result)
-
+		if (type === 'run_command') msg = toolsService.stringOfResult['run_command'](toolMessage.params, result)
+		else msg = toolsService.stringOfResult['run_persistent_command'](toolMessage.params, result)
 
 		componentParams.children = <ToolChildrenWrapper className='whitespace-pre text-nowrap overflow-auto text-sm'>
 			<div className='!select-text cursor-auto'>
-				<div>
-					<span className="text-void-fg-1 font-sans">{`Ran command: `}</span>
-					<span className="font-mono">{command}</span>
-				</div>
-				{msg.length && <div>
-					<span className='text-void-fg-1'>{`Result: `}</span>
-					<span className="font-mono">{msg}</span>
-				</div>}
+				<BlockCode initValue={`${msg}`} language='shellscript' />
 			</div>
 		</ToolChildrenWrapper>
 	}
-	else if (toolMessage.type === 'rejected' || toolMessage.type === 'tool_error' || toolMessage.type === 'running_now' || toolMessage.type === 'tool_request') {
-		if (toolMessage.type === 'tool_error') {
-			const { result } = toolMessage
-			componentParams.children = <ToolChildrenWrapper>
-				{result}
-				<div ref={divRef} className='relative' />
-			</ToolChildrenWrapper>
-		}
+	else if (toolMessage.type === 'tool_error') {
+		const { result } = toolMessage
+		componentParams.children = <ToolChildrenWrapper>
+			{result}
+		</ToolChildrenWrapper>
+	}
+	else if (toolMessage.type === 'running_now') {
+		componentParams.children = <ToolChildrenWrapper>
+			<div ref={divRef} className='relative min-h-40' />
+		</ToolChildrenWrapper>
+	}
+	else if (toolMessage.type === 'rejected' || toolMessage.type === 'tool_request') {
 	}
 
 	return <>
-		<ToolHeaderWrapper {...componentParams} />
+		<ToolHeaderWrapper {...componentParams} isOpen={toolMessage.type === 'running_now' ? true : undefined} />
 	</>
 }
 
@@ -1650,13 +1642,13 @@ const toolNameToComponent: { [T in ToolName]: { resultWrapper: ResultWrapper<T>,
 			const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor);
 			const icon = null
 
-			if (toolMessage.type === 'tool_request') return null
-			if (toolMessage.type === 'rejected') return null // will never happen, not rejectable
+			if (toolMessage.type === 'tool_request') return null // do not show past requests
 			if (toolMessage.type === 'running_now') return null // do not show running
 
 			const isError = toolMessage.type === 'tool_error'
+			const isRejected = toolMessage.type === 'rejected'
 			const { rawParams, params } = toolMessage
-			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, }
+			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, isRejected, }
 
 			if (toolMessage.params.startLine !== null || toolMessage.params.endLine !== null) {
 				const start = toolMessage.params.startLine === null ? `1` : `${toolMessage.params.startLine}`
@@ -1695,13 +1687,13 @@ const toolNameToComponent: { [T in ToolName]: { resultWrapper: ResultWrapper<T>,
 			const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor)
 			const icon = null
 
-			if (toolMessage.type === 'tool_request') return null
-			if (toolMessage.type === 'rejected') return null // will never happen, not rejectable
+			if (toolMessage.type === 'tool_request') return null // do not show past requests
 			if (toolMessage.type === 'running_now') return null // do not show running
 
 			const isError = toolMessage.type === 'tool_error'
+			const isRejected = toolMessage.type === 'rejected'
 			const { rawParams, params } = toolMessage
-			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, }
+			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, isRejected, }
 
 			if (params.uri) {
 				const rel = getRelative(params.uri, accessor)
@@ -1743,13 +1735,13 @@ const toolNameToComponent: { [T in ToolName]: { resultWrapper: ResultWrapper<T>,
 			const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor)
 			const icon = null
 
-			if (toolMessage.type === 'tool_request') return null
-			if (toolMessage.type === 'rejected') return null // will never happen, not rejectable
+			if (toolMessage.type === 'tool_request') return null // do not show past requests
 			if (toolMessage.type === 'running_now') return null // do not show running
 
 			const isError = toolMessage.type === 'tool_error'
+			const isRejected = toolMessage.type === 'rejected'
 			const { rawParams, params } = toolMessage
-			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, }
+			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, isRejected, }
 
 			if (params.uri) {
 				const rel = getRelative(params.uri, accessor)
@@ -1793,16 +1785,16 @@ const toolNameToComponent: { [T in ToolName]: { resultWrapper: ResultWrapper<T>,
 			const accessor = useAccessor()
 			const commandService = accessor.get('ICommandService')
 			const isError = toolMessage.type === 'tool_error'
+			const isRejected = toolMessage.type === 'rejected'
 			const title = getTitle(toolMessage)
 			const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor)
 			const icon = null
 
-			if (toolMessage.type === 'tool_request') return null
-			if (toolMessage.type === 'rejected') return null // will never happen, not rejectable
+			if (toolMessage.type === 'tool_request') return null // do not show past requests
 			if (toolMessage.type === 'running_now') return null // do not show running
 
 			const { rawParams, params } = toolMessage
-			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, }
+			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, isRejected, }
 
 			if (params.includePattern) {
 				componentParams.info = `Only search in ${params.includePattern}`
@@ -1842,16 +1834,16 @@ const toolNameToComponent: { [T in ToolName]: { resultWrapper: ResultWrapper<T>,
 			const accessor = useAccessor()
 			const commandService = accessor.get('ICommandService')
 			const isError = toolMessage.type === 'tool_error'
+			const isRejected = toolMessage.type === 'rejected'
 			const title = getTitle(toolMessage)
 			const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor)
 			const icon = null
 
-			if (toolMessage.type === 'tool_request') return null
-			if (toolMessage.type === 'rejected') return null // will never happen, not rejectable
+			if (toolMessage.type === 'tool_request') return null // do not show past requests
 			if (toolMessage.type === 'running_now') return null // do not show running
 
 			const { rawParams, params } = toolMessage
-			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, }
+			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, isRejected, }
 
 			if (params.searchInFolder || params.isRegex) {
 				let info: string[] = []
@@ -1897,14 +1889,16 @@ const toolNameToComponent: { [T in ToolName]: { resultWrapper: ResultWrapper<T>,
 			const accessor = useAccessor();
 			const toolsService = accessor.get('IToolsService');
 			const title = getTitle(toolMessage);
+			const isError = toolMessage.type === 'tool_error';
+			const isRejected = toolMessage.type === 'rejected'
 			const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor);
 			const icon = null;
 
-			if (toolMessage.type === 'tool_request' || toolMessage.type === 'rejected' || toolMessage.type === 'running_now') return null;
+			if (toolMessage.type === 'tool_request') return null // do not show past requests
+			if (toolMessage.type === 'running_now') return null // do not show running
 
-			const isError = toolMessage.type === 'tool_error';
 			const { rawParams, params } = toolMessage;
-			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon };
+			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, isRejected };
 
 			const infoarr: string[] = []
 			const uriStr = getRelative(params.uri, accessor)
@@ -1948,13 +1942,13 @@ const toolNameToComponent: { [T in ToolName]: { resultWrapper: ResultWrapper<T>,
 			const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor)
 			const icon = null
 
-			if (toolMessage.type === 'tool_request') return null
-			if (toolMessage.type === 'rejected') return null // will never happen, not rejectable
+			if (toolMessage.type === 'tool_request') return null // do not show past requests
 			if (toolMessage.type === 'running_now') return null // do not show running
 
 			const isError = toolMessage.type === 'tool_error'
+			const isRejected = toolMessage.type === 'rejected'
 			const { rawParams, params } = toolMessage
-			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, }
+			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, isRejected, }
 
 			componentParams.info = getRelative(uri, accessor) // full path
 
@@ -2172,19 +2166,19 @@ const toolNameToComponent: { [T in ToolName]: { resultWrapper: ResultWrapper<T>,
 			const title = getTitle(toolMessage)
 			const icon = null
 
-			if (toolMessage.type === 'tool_request') return null
-			if (toolMessage.type === 'rejected') return null // will never happen, not rejectable
+			if (toolMessage.type === 'tool_request') return null // do not show past requests
 			if (toolMessage.type === 'running_now') return null // do not show running
 
 			const isError = toolMessage.type === 'tool_error'
+			const isRejected = toolMessage.type === 'rejected'
 			const { rawParams, params } = toolMessage
-			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, }
+			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, isRejected, }
 
 			componentParams.info = params.cwd ? `Running in ${getRelative(URI.file(params.cwd), accessor)}` : ''
 			if (toolMessage.type === 'success') {
 				const { result } = toolMessage
 				const { persistentTerminalId } = result
-				componentParams.desc1 = terminalNameOfId(persistentTerminalId)
+				componentParams.desc1 = persistentTerminalNameOfId(persistentTerminalId)
 				componentParams.onClick = () => terminalToolsService.focusPersistentTerminal(persistentTerminalId)
 			}
 			else if (toolMessage.type === 'tool_error') {
@@ -2209,17 +2203,17 @@ const toolNameToComponent: { [T in ToolName]: { resultWrapper: ResultWrapper<T>,
 			const title = getTitle(toolMessage)
 			const icon = null
 
-			if (toolMessage.type === 'tool_request') return null
-			if (toolMessage.type === 'rejected') return null // will never happen, not rejectable
+			if (toolMessage.type === 'tool_request') return null // do not show past requests
 			if (toolMessage.type === 'running_now') return null // do not show running
 
 			const isError = toolMessage.type === 'tool_error'
+			const isRejected = toolMessage.type === 'rejected'
 			const { rawParams, params } = toolMessage
-			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, }
+			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, isRejected, }
 
 			if (toolMessage.type === 'success') {
 				const { persistentTerminalId } = params
-				componentParams.desc1 = terminalNameOfId(persistentTerminalId)
+				componentParams.desc1 = persistentTerminalNameOfId(persistentTerminalId)
 				componentParams.onClick = () => terminalToolsService.focusPersistentTerminal(persistentTerminalId)
 			}
 			else if (toolMessage.type === 'tool_error') {
@@ -2739,9 +2733,7 @@ export const SidebarChat = () => {
 	const currThreadStreamState = useChatThreadsStreamState(chatThreadsState.currentThreadId)
 	const isRunning = currThreadStreamState?.isRunning
 	const latestError = currThreadStreamState?.error
-	const displayContentSoFar = currThreadStreamState?.displayContentSoFar
-	const toolCallSoFar = currThreadStreamState?.toolCallSoFar
-	const reasoningSoFar = currThreadStreamState?.reasoningSoFar
+	const { displayContentSoFar, toolCallSoFar, reasoningSoFar } = currThreadStreamState?.llmInfo ?? {}
 
 	// this is just if it's currently being generated, NOT if it's currently running
 	const toolIsGenerating = toolCallSoFar && !toolCallSoFar.isDone && toolCallSoFar.name === 'edit_file' // show loading for slow tools (right now just edit)
@@ -2779,9 +2771,9 @@ export const SidebarChat = () => {
 
 	}, [chatThreadsService, isDisabled, isRunning, textAreaRef, textAreaFnsRef, setSelections, settingsState])
 
-	const onAbort = () => {
+	const onAbort = async () => {
 		const threadId = currentThread.id
-		chatThreadsService.stopRunning(threadId)
+		await chatThreadsService.abortRunning(threadId)
 	}
 
 	const keybindingString = accessor.get('IKeybindingService').lookupKeybinding(VOID_CTRL_L_ACTION_ID)?.getLabel()

@@ -146,8 +146,8 @@ export const _registerServices = (accessor: ServicesAccessor) => {
 
 	colorThemeState = themeService.getColorTheme().type
 	disposables.push(
-		themeService.onDidColorThemeChange(({ theme }) => {
-			colorThemeState = theme.type
+		themeService.onDidColorThemeChange(({ type }) => {
+			colorThemeState = type
 			colorThemeStateListeners.forEach(l => l(colorThemeState))
 		})
 	)
