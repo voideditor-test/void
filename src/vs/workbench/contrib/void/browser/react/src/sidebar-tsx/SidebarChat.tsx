@@ -1540,13 +1540,13 @@ const CanceledTool = ({ toolName }: { toolName: ToolName }) => {
 
 
 
-const CommandTool = ({ toolMessage, type }: {
+const CommandTool = ({ toolMessage, type, threadId }: { threadId: string } & ({
 	toolMessage: Exclude<ToolMessage<'run_command'>, { type: 'invalid_params' }>
 	type: 'run_command'
 } | {
 	toolMessage: Exclude<ToolMessage<'run_persistent_command'>, { type: 'invalid_params' }>
 	type: | 'run_persistent_command'
-}) => {
+})) => {
 	const accessor = useAccessor()
 
 	const commandService = accessor.get('ICommandService')
@@ -1557,6 +1557,7 @@ const CommandTool = ({ toolMessage, type }: {
 	const title = getTitle(toolMessage)
 	const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor)
 	const icon = null
+	const streamState = useChatThreadsStreamState(threadId)
 
 	const divRef = useRef<HTMLDivElement | null>(null)
 
@@ -1564,9 +1565,14 @@ const CommandTool = ({ toolMessage, type }: {
 	const { rawParams, params } = toolMessage
 	const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, isRejected, }
 
-	useEffect(() => {
+
+	const effect = async () => {
+		if (streamState?.isRunning !== 'tool') return
 		if (type !== 'run_command' || toolMessage.type !== 'running_now') return;
 
+		// wait for the interruptor so we know it's running
+
+		await streamState?.interrupt
 		const container = divRef.current;
 		if (!container) return;
 
@@ -1574,23 +1580,27 @@ const CommandTool = ({ toolMessage, type }: {
 		if (!terminal) return;
 
 		terminal.detachFromElement();
-		// Re-attach terminal to the new container
 		terminal.attachToElement(container);
 
 		// Listen for size changes
 		const resizeObserver = new ResizeObserver((entries) => {
-			console.log('calling resize')
 			const height = entries[0].borderBoxSize[0].blockSize
 			const width = entries[0].borderBoxSize[0].inlineSize
 			// Layout terminal to fit container dimensions
 			if (typeof terminal.layout === 'function') {
-				console.log('laying out ', height, width, container)
+				terminalService.setActiveInstance(terminal)
+				terminal.attachToElement(container);
 				terminal.layout({ width, height });
+
 			}
 		})
 
 		resizeObserver.observe(container);
 		return () => { terminal.detachFromElement(); resizeObserver?.disconnect(); }
+	}
+
+	useEffect(() => {
+		effect()
 	}, [terminalToolsService, toolMessage, toolMessage.type, type]);
 
 	if (toolMessage.type === 'success') {
@@ -1607,7 +1617,7 @@ const CommandTool = ({ toolMessage, type }: {
 
 		componentParams.children = <ToolChildrenWrapper className='whitespace-pre text-nowrap overflow-auto text-sm'>
 			<div className='!select-text cursor-auto'>
-				<BlockCode initValue={`${msg}`} language='shellscript' />
+				<BlockCode initValue={`${msg.trim()}`} language='shellscript' />
 			</div>
 		</ToolChildrenWrapper>
 	}
@@ -1618,9 +1628,7 @@ const CommandTool = ({ toolMessage, type }: {
 		</ToolChildrenWrapper>
 	}
 	else if (toolMessage.type === 'running_now') {
-		componentParams.children = <ToolChildrenWrapper>
-			<div ref={divRef} className='relative min-h-40' />
-		</ToolChildrenWrapper>
+		componentParams.children = <div ref={divRef} className='relative h-[300px] text-sm' />
 	}
 	else if (toolMessage.type === 'rejected' || toolMessage.type === 'tool_request') {
 	}

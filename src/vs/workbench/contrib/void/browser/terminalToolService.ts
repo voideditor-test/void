@@ -208,9 +208,8 @@ export class TerminalToolService extends Disposable implements ITerminalToolServ
 		}
 		else {
 			const { cwd } = params
-			terminal = await this._createTerminal({ cwd: cwd, config: undefined })
+			terminal = await this._createTerminal({ cwd: cwd, config: { name: 'Void Temporary Terminal', title: 'Void Temporary Terminal' } })
 			this.temporaryTerminalInstanceOfId[params.terminalId] = terminal
-			console.log('setting terminal', params.terminalId)
 		}
 
 		const interrupt = () => {

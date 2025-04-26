@@ -368,12 +368,36 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 
 	// this should be the only place this.state = ... appears besides constructor
 	private _setState(state: Partial<ThreadsState>, affectsCurrent: boolean) {
-		this.state = {
+		const newState = {
 			...this.state,
 			...state
 		}
+
+		this.state = newState
+
 		if (affectsCurrent)
 			this._onDidChangeCurrentThread.fire()
+
+
+		// if we just switched to a thread, update its current stream state if it's not streaming to possibly streaming
+		const threadId = newState.currentThreadId
+		const streamState = this.streamState[threadId]
+		if (streamState?.isRunning === undefined && !streamState?.error) {
+
+			// set streamState
+			const messages = newState.allThreads[threadId]?.messages
+			const lastMessage = messages && messages[messages.length - 1]
+			// if awaiting user but stream state doesn't indicate it (happens if restart Void)
+			if (lastMessage && lastMessage.role === 'tool' && lastMessage.type === 'tool_request')
+				this._setStreamState(threadId, { isRunning: 'awaiting_user', })
+
+			// if running now but stream state doesn't indicate it (happens if restart Void), cancel that last tool
+			if (lastMessage && lastMessage.role === 'tool' && lastMessage.type === 'running_now') {
+				this._updateLatestTool(threadId, { role: 'tool', type: 'rejected', content: lastMessage.content, id: lastMessage.id, rawParams: lastMessage.rawParams, result: null, name: lastMessage.name, params: lastMessage.params })
+			}
+
+		}
+
 	}
 
 
@@ -451,27 +475,25 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	async abortRunning(threadId: string) {
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return // should never happen
-		// interrupt
-		console.log('aaaaa')
+
+		// interrupt any effects
 		const interrupt = await this.streamState[threadId]?.interrupt
-		console.log('bbbbb', interrupt)
 		interrupt?.()
 
-		// interrupt assistant message
+		// add assistant message
 		if (this.streamState[threadId]?.isRunning === 'LLM') {
-			// abort the stream first so it doesn't change any state
 			const { displayContentSoFar, reasoningSoFar, toolCallSoFar } = this.streamState[threadId].llmInfo
 			this._addMessageToThread(threadId, { role: 'assistant', displayContent: displayContentSoFar, reasoning: reasoningSoFar, anthropicReasoning: null })
 			if (toolCallSoFar) this._addMessageToThread(threadId, { role: 'interrupted_streaming_tool', name: toolCallSoFar.name })
 			this._addUserCheckpoint({ threadId })
 		}
+		// add tool that's running
 		else if (this.streamState[threadId]?.isRunning === 'tool') {
 			const { toolName, toolParams, id, content, rawParams } = this.streamState[threadId].toolInfo
 			this._updateLatestTool(threadId, { role: 'tool', name: toolName, params: toolParams, id, content, rawParams, type: 'rejected', result: null })
 		}
-		else {
-			// this should be this.streamState[threadId]?.isRunning === 'awaiting_user', but can be undefined too if closed and reopened editor...
-			// reject the tool for the user if relevant
+		// reject the tool for the user if relevant
+		else if (this.streamState[threadId]?.isRunning === 'awaiting_user') {
 			this.rejectLatestToolRequest(threadId)
 		}
 
@@ -563,6 +585,9 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			const errorMessage = getErrorMessage(error)
 			this._updateLatestTool(threadId, { role: 'tool', type: 'tool_error', params: toolParams, result: errorMessage, name: toolName, content: errorMessage, id: toolId, rawParams: opts.unvalidatedToolParams })
 			return {}
+		}
+		finally {
+			this._setStreamState(threadId, undefined)
 		}
 
 		// 4. stringify the result to give to the LLM
