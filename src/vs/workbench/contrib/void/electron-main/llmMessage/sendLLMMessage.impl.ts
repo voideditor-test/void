@@ -82,7 +82,7 @@ const newOpenAICompatibleSDK = async ({ settingsOfProvider, providerName, includ
 			baseURL: 'https://openrouter.ai/api/v1',
 			apiKey: thisConfig.apiKey,
 			defaultHeaders: {
-				'HTTP-Referer': 'https://voideditor-test.com', // Optional, for including your app on openrouter.ai rankings.
+				'HTTP-Referer': 'https://voideditor.com', // Optional, for including your app on openrouter.ai rankings.
 				'X-Title': 'Void', // Optional. Shows in rankings on openrouter.ai.
 			},
 			...commonPayloadOpts,
@@ -162,6 +162,10 @@ const _sendOpenAICompatibleFIM = async ({ messages: { prefix, suffix, stopTokens
 
 const toOpenAICompatibleTool = (toolInfo: InternalToolInfo) => {
 	const { name, description, params } = toolInfo
+
+	const paramsWithType: { [s: string]: { description: string; type: 'string' } } = {}
+	for (const key in params) { paramsWithType[key] = { ...params[key], type: 'string' } }
+
 	return {
 		type: 'function',
 		function: {
@@ -358,12 +362,14 @@ const _openaiCompatibleList = async ({ onSuccess: onSuccess_, onError: onError_,
 // ------------ ANTHROPIC (HELPERS) ------------
 const toAnthropicTool = (toolInfo: InternalToolInfo) => {
 	const { name, description, params } = toolInfo
+	const paramsWithType: { [s: string]: { description: string; type: 'string' } } = {}
+	for (const key in params) { paramsWithType[key] = { ...params[key], type: 'string' } }
 	return {
 		name: name,
 		description: description,
 		input_schema: {
 			type: 'object',
-			properties: params,
+			properties: paramsWithType,
 			// required: Object.keys(params),
 		},
 	} satisfies Anthropic.Messages.Tool
