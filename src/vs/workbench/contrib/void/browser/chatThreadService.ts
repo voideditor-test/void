@@ -665,11 +665,11 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			let shouldRetryLLM = true
 			let nAttempts = 0
 			while (shouldRetryLLM) {
-				if (this.streamState[threadId]?.isRunning) {
-					// if already streaming, stop
-					console.log('returning...', this.streamState[threadId])
-					return
-				}
+				// if (this.streamState[threadId]?.isRunning === 'LLM' || ) {
+				// 	// if already streaming, stop
+				// 	console.log('returning...', this.streamState[threadId])
+				// 	return
+				// }
 				shouldRetryLLM = false
 
 				let resMessageIsDonePromise: (toolCall?: RawToolCallObj | undefined) => void // resolves when user approves this tool use (or if tool doesn't require approval)
